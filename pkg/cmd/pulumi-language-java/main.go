@@ -174,8 +174,19 @@ func (host *javaLanguageHost) determinePulumiPackages(
 
 	// Run our classpath introspection from the SDK and parse the resulting JSON
 	cmd := host.exec.cmd
-	args := host.exec.pluginArgs
-	output, err := host.runJavaCommand(ctx, cmd, args)
+
+	// Build the project, if possible, to avoid user errors during bootstrap
+	if host.exec.buildArgs != nil {
+		buildArgs := host.exec.buildArgs
+		output, err := host.runJavaCommand(ctx, cmd, buildArgs)
+		if err != nil {
+			return nil, errors.Wrapf(err, "language host counld not run build command successfully")
+		}
+		logging.V(5).Infof("GetRequiredPlugins: build raw output=%v", output)
+	}
+
+	pluginArgs := host.exec.pluginArgs
+	output, err := host.runJavaCommand(ctx, cmd, pluginArgs)
 	if err != nil {
 		return nil, errors.Wrapf(err, "language host counld not run plugin discovery command successfully")
 	}
@@ -434,9 +445,10 @@ func resolveExecutor(exec string) (*javaExecutor, error) {
 func newGradleExecutor(cmd string) (*javaExecutor, error) {
 	return &javaExecutor{
 		cmd:       cmd,
-		buildArgs: []string{"build", "-q", "--console=plain"},
-		runArgs:   []string{"run", "-q", "--console=plain"},
+		buildArgs: []string{"build", "--console=plain"},
+		runArgs:   []string{"run", "--console=plain"},
 		pluginArgs: []string{
+			/* STDOUT needs to be clean of gradle output, because we expect a JSON with plugin results */
 			"-q", // must first due to a bug https://github.com/gradle/gradle/issues/5098
 			"run", "--console=plain",
 			"-PmainClass=com.pulumi.bootstrap.internal.Main",
@@ -448,10 +460,12 @@ func newGradleExecutor(cmd string) (*javaExecutor, error) {
 func newMavenExecutor(cmd string) (*javaExecutor, error) {
 	return &javaExecutor{
 		cmd:       cmd,
-		buildArgs: []string{"--quiet", "--no-transfer-progress", "compile"},
-		runArgs:   []string{"--quiet", "--no-transfer-progress", "compile", "exec:java"},
+		buildArgs: []string{"--no-transfer-progress", "compile"},
+		runArgs:   []string{"--no-transfer-progress", "compile", "exec:java"},
 		pluginArgs: []string{
-			"--quiet", "--no-transfer-progress", "compile", "exec:java",
+			/* move normal output to STDERR, because we need STDOUT for JSON with plugin results */
+			"-Dorg.slf4j.simpleLogger.logFile=System.err",
+			"--no-transfer-progress", "compile", "exec:java",
 			"-DmainClass=com.pulumi.bootstrap.internal.Main",
 			"-DmainArgs=packages",
 		},
